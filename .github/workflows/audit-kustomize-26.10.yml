@@ -1,0 +1,95 @@
+name: Audit Kustomize 26.10
+
+on:
+  push:
+    branches:
+      - audit/kustomize-26.10-runner
+
+permissions:
+  contents: read
+
+jobs:
+  audit:
+    runs-on: ubuntu-26.04
+
+    steps:
+      - name: Inspect runner Kustomize
+        shell: bash
+        run: |
+          set -euxo pipefail
+
+          echo "===== RUNNER ====="
+          cat /etc/os-release
+
+          echo "===== PREINSTALLED KUSTOMIZE ====="
+          command -v kustomize
+          realpath "$(command -v kustomize)"
+          kustomize version
+          sha256sum "$(realpath "$(command -v kustomize)")"
+          go version -m "$(realpath "$(command -v kustomize)")" || true
+
+      - name: Checkout Kubeflow Community Distribution 26.10.0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: kubeflow/community-distribution
+          ref: 26.10.0
+          path: community-distribution
+
+      - name: Build 26.10.0 with runner Kustomize
+        shell: bash
+        working-directory: community-distribution
+        run: |
+          set -euxo pipefail
+
+          echo "===== KUSTOMIZE USED BY THIS STEP ====="
+          command -v kustomize
+          kustomize version
+          sha256sum "$(realpath "$(command -v kustomize)")"
+
+          echo "===== BUILD ====="
+          kustomize build example > /tmp/rendered.yaml
+
+          echo "===== RESULT ====="
+          wc -l /tmp/rendered.yaml
+          grep -n 'kind: WorkspaceKind' /tmp/rendered.yaml | head || true
+          grep -n 'kubeflow-workspaces' /tmp/rendered.yaml | head || true
+
+      - name: Compare official Kustomize 5.8.3
+        if: always()
+        shell: bash
+        working-directory: community-distribution
+        run: |
+          set -euxo pipefail
+
+          tmp="$(mktemp -d)"
+
+          curl --fail --show-error --silent --location \
+            "https://github.com/kubernetes-sigs/kustomize/releases/download/kustomize%2Fv5.8.3/kustomize_v5.8.3_linux_amd64.tar.gz" \
+            --output "$tmp/kustomize.tar.gz"
+
+          tar -xzf "$tmp/kustomize.tar.gz" -C "$tmp"
+
+          echo "===== CHECKSUM COMPARISON ====="
+          sha256sum \
+            "$(realpath "$(command -v kustomize)")" \
+            "$tmp/kustomize"
+
+          echo "===== OFFICIAL VERSION ====="
+          "$tmp/kustomize" version
+          go version -m "$tmp/kustomize" || true
+
+          echo "===== OFFICIAL BUILD ====="
+
+          set +e
+          "$tmp/kustomize" build example \
+            > /tmp/official-rendered.yaml \
+            2> /tmp/official-rendered.err
+          status=$?
+          set -e
+
+          echo "official_exit=$status"
+          cat /tmp/official-rendered.err
+
+          if [[ "$status" -eq 0 ]]; then
+            wc -l /tmp/official-rendered.yaml
+          fi
